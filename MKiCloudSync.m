@@ -116,13 +116,24 @@ static BOOL _isSyncing;
 
 + (NSMutableSet *) ignoredKeys
 {
-	static NSMutableSet *ignoredKeys;
+	static NSMutableSet *ignoredKeys = nil;
 	static dispatch_once_t once;
 	dispatch_once(&once, ^{
 		ignoredKeys = [NSMutableSet new];
 	});
 	
 	return ignoredKeys;
+}
+
++ (NSMutableSet *)whitelistedKeys
+{
+	static NSMutableSet *whitelistedKeys = nil;
+	static dispatch_once_t whitelistedKeysOnceToken;
+	dispatch_once(&whitelistedKeysOnceToken, ^{
+		whitelistedKeys = [NSMutableSet new];
+	});
+	
+	return whitelistedKeys;
 }
 
 + (void) cleanUbiquitousStore
@@ -133,6 +144,10 @@ static BOOL _isSyncing;
 	NSDictionary *dict = [store dictionaryRepresentation];
 	
 	NSMutableSet *keys = [NSMutableSet setWithArray: [dict allKeys]];
+	NSSet *whitelistedKeys = [self whitelistedKeys];
+	if ([whitelistedKeys count] > 0) {
+		[keys intersectSet:[self whitelistedKeys]];
+	}
 	[keys minusSet: [self ignoredKeys]];
 	
 	[keys enumerateObjectsUsingBlock: ^(NSString *key, BOOL *stop) {

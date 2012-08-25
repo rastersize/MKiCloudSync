@@ -39,6 +39,9 @@ extern NSString *MKiCloudSyncDidUpdateNotification;
 + (BOOL) start;
 
 + (NSMutableSet *) ignoredKeys;
+// Only sync the keys which have been whitelisted.
+// Takes precedence over +ignoredKeys.
++ (NSMutableSet *) whitelistedKeys;
 
 + (void) cleanUbiquitousStore;
 + (void) stop;
