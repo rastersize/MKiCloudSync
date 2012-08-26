@@ -204,7 +204,6 @@ static dispatch_queue_t _queue;
 		[syncedKeys intersectSet: [self whitelistedKeys]];
 	}
 	[syncedKeys minusSet: [self ignoredKeys]];
-	DLog(@"syncedKeys = %@", syncedKeys);
 	
 	NSUbiquitousKeyValueStore *store = [NSUbiquitousKeyValueStore defaultStore];
 	for (id key in syncedKeys) {
