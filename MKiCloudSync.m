@@ -46,7 +46,7 @@ static BOOL _isSyncing;
 {
 	static dispatch_once_t onceToken;
 	dispatch_once(&onceToken, ^{
-		_queue = dispatch_queue_create("com.mugunthkumarMKiCloudSync", DISPATCH_QUEUE_SERIAL);
+		_queue = dispatch_queue_create("com.mugunthkumar.MKiCloudSync", DISPATCH_QUEUE_SERIAL);
 		_isSyncing = NO;
 	});
 }
@@ -80,23 +80,28 @@ static BOOL _isSyncing;
 #if MKiCloudSyncDebug
 			NSLog(@"MKiCloudSync: Will start sync");
 #endif
-			
-			// Force push
-			[MKiCloudSync pushToICloud];
-			
 			// Force pull
 			NSUbiquitousKeyValueStore *store = [NSUbiquitousKeyValueStore defaultStore];
 			NSDictionary *dict = [store dictionaryRepresentation];
 			
+			NSMutableSet *syncedKeys = [NSMutableSet setWithArray: [dict allKeys]];
+			if ([[self whitelistedKeys] count] > 0) {
+				[syncedKeys intersectSet: [self whitelistedKeys]];
+			}
+			[syncedKeys minusSet: [self ignoredKeys]];
+			
 			NSUserDefaults *userDefaults = [NSUserDefaults standardUserDefaults];
-			[dict enumerateKeysAndObjectsUsingBlock: ^(id key, id obj, BOOL *stop) {
-				[userDefaults setObject: obj forKey: key];
-			}];
+			for (id key in syncedKeys) {
+				id obj = [store objectForKey: key];
+				[userDefaults setObject: obj forKey:key];
+			}
 			[userDefaults synchronize];
 			
-			NSNotificationCenter *dnc = [NSNotificationCenter defaultCenter];
+			// Force push
+			[MKiCloudSync pushToICloud];
 			
 			// Post notification
+			NSNotificationCenter *dnc = [NSNotificationCenter defaultCenter];
 			[dnc postNotificationName: MKiCloudSyncDidUpdateNotification object: self];
 			
 			// Add self as observer
@@ -125,7 +130,7 @@ static BOOL _isSyncing;
 	return ignoredKeys;
 }
 
-+ (NSMutableSet *)whitelistedKeys
++ (NSMutableSet *) whitelistedKeys
 {
 	static NSMutableSet *whitelistedKeys = nil;
 	static dispatch_once_t whitelistedKeysOnceToken;
@@ -143,64 +148,74 @@ static BOOL _isSyncing;
 	NSUbiquitousKeyValueStore *store = [NSUbiquitousKeyValueStore defaultStore];
 	NSDictionary *dict = [store dictionaryRepresentation];
 	
-	NSMutableSet *keys = [NSMutableSet setWithArray: [dict allKeys]];
-	NSSet *whitelistedKeys = [self whitelistedKeys];
-	if ([whitelistedKeys count] > 0) {
-		[keys intersectSet:[self whitelistedKeys]];
+	NSMutableSet *syncedKeys = [NSMutableSet setWithArray: [dict allKeys]];
+	if ([[self whitelistedKeys] count] > 0) {
+		[syncedKeys intersectSet: [self whitelistedKeys]];
 	}
-	[keys minusSet: [self ignoredKeys]];
+	[syncedKeys minusSet: [self ignoredKeys]];
 	
-	[keys enumerateObjectsUsingBlock: ^(NSString *key, BOOL *stop) {
+	for (id key in syncedKeys) {
 		[store removeObjectForKey: key];
-	}];
-	
+	}
 	[store synchronize];
 	
 #if MKiCloudSyncDebug
 		NSLog(@"MKiCloudSync: Cleaned ubiquitous store");
 #endif
 }
+
 + (void) pullFromICloud: (NSNotification *) note
 {
 	NSNotificationCenter *dnc = [NSNotificationCenter defaultCenter];
 	[dnc removeObserver: self name: NSUserDefaultsDidChangeNotification object: nil];
 	
 	NSUbiquitousKeyValueStore *store = note.object;
-	NSArray *changedKeys = [note.userInfo objectForKey: NSUbiquitousKeyValueStoreChangedKeysKey];
+	NSMutableSet *changedKeys = [NSMutableSet setWithArray:[note.userInfo objectForKey: NSUbiquitousKeyValueStoreChangedKeysKey]];
 
 #if MKiCloudSyncDebug
 		NSLog(@"MKiCloudSync: Pulled from iCloud");
 #endif
 	
+	if ([[self whitelistedKeys] count] > 0) {
+		[changedKeys intersectSet: [self whitelistedKeys]];
+	}
+	[changedKeys minusSet: [self ignoredKeys]];
+	
 	NSUserDefaults *userDefaults = [NSUserDefaults standardUserDefaults];
-	[changedKeys enumerateObjectsUsingBlock: ^(NSString *key, NSUInteger idx, BOOL *stop) {
+	for (id key in changedKeys) {
 		id obj = [store objectForKey: key];
 		[userDefaults setObject: obj forKey: key];
-	}];
+	}
 	[userDefaults synchronize];
 	
 	[dnc addObserver: self selector: @selector(pushToICloud) name: NSUserDefaultsDidChangeNotification object: nil];
 	[dnc postNotificationName: MKiCloudSyncDidUpdateNotification object: nil];
 }
+
 + (void) pushToICloud
 {
 	NSString *identifier = [[NSBundle mainBundle] bundleIdentifier];
+	NSDictionary *persistentDomain = [[[NSUserDefaults standardUserDefaults] persistentDomainForName: identifier] copy];
 	
-	NSMutableDictionary *persistentDomain = [[[NSUserDefaults standardUserDefaults] persistentDomainForName: identifier] mutableCopy];
-	
-	NSArray *ignoredKeys = [[self ignoredKeys] allObjects];
-	[persistentDomain removeObjectsForKeys: ignoredKeys];
+	NSMutableSet *syncedKeys = [NSMutableSet setWithArray: [persistentDomain allKeys]];
+	if ([[self whitelistedKeys] count] > 0) {
+		[syncedKeys intersectSet: [self whitelistedKeys]];
+	}
+	[syncedKeys minusSet: [self ignoredKeys]];
+	DLog(@"syncedKeys = %@", syncedKeys);
 	
 	NSUbiquitousKeyValueStore *store = [NSUbiquitousKeyValueStore defaultStore];
-	[persistentDomain enumerateKeysAndObjectsUsingBlock: ^(id key, id obj, BOOL *stop) {
+	for (id key in syncedKeys) {
+		id obj = [persistentDomain objectForKey: key];
 		[store setObject: obj forKey: key];
-	}];
+	}
 	[store synchronize];
 	
 #if MKiCloudSyncDebug
 	NSLog(@"MKiCloudSync: Pushed to iCloud");
 #endif
 }
+
 + (void) stop
 {
 #if MKiCloudSyncDebug
