@@ -3,19 +3,19 @@
 //
 //  Created by Mugunth Kumar on 11/20//11.
 //  Modified by Alexsander Akers on 1/4/12.
-//  
+//
 //  Copyright (C) 2011-2020 by Steinlogic
-//  
+//
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal
 //  in the Software without restriction, including without limitation the rights
 //  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 //  copies of the Software, and to permit persons to whom the Software is
 //  furnished to do so, subject to the following conditions:
-//  
+//
 //  The above copyright notice and this permission notice shall be included in
 //  all copies or substantial portions of the Software.
-//  
+//
 //  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 //  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 //  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -24,106 +24,99 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //  THE SOFTWARE.
 
-NSString *MKiCloudSyncDidUpdateNotification = @"MKiCloudSyncDidUpdateNotification";
-
 #import "MKiCloudSync.h"
+
+NSString *const MKiCloudSyncDidUpdateNotification = @"MKiCloudSyncDidUpdateNotification";
+
+static BOOL _isSyncing;
+static dispatch_queue_t _queue;
 
 @interface MKiCloudSync ()
 
++ (BOOL) tryToStartSync;
+
 + (void) pullFromICloud: (NSNotification *) note;
 + (void) pushToICloud;
-
-+ (BOOL)tryToStartSync;
 
 @end
 
 @implementation MKiCloudSync
 
-static dispatch_queue_t _queue;
-static BOOL _isSyncing;
-
-+ (void)initialize
-{
-	static dispatch_once_t onceToken;
-	dispatch_once(&onceToken, ^{
-		_queue = dispatch_queue_create("com.mugunthkumar.MKiCloudSync", DISPATCH_QUEUE_SERIAL);
-		_isSyncing = NO;
-	});
-}
-
 + (BOOL) isSyncing
 {
 	__block BOOL isSyncing = NO;
+	
 	dispatch_sync(_queue, ^{
 		isSyncing = _isSyncing;
 	});
+	
 	return isSyncing;
-}
-
-+ (BOOL)tryToStartSync
-{
-	__block BOOL didSucceed = NO;
-	dispatch_sync(_queue, ^{
-		if (!_isSyncing) {
-			_isSyncing = YES;
-			didSucceed = YES;
-		}
-	});
-	return didSucceed;
 }
 
 + (BOOL) start
 {
-	if ([NSUbiquitousKeyValueStore class] && [NSUbiquitousKeyValueStore defaultStore])
+	if ([NSUbiquitousKeyValueStore class] && [NSUbiquitousKeyValueStore defaultStore] && [self tryToStartSync])
 	{
-		if ([self tryToStartSync]) {
 #if MKiCloudSyncDebug
-			NSLog(@"MKiCloudSync: Will start sync");
+		NSLog(@"MKiCloudSync: Will start sync");
 #endif
-			// Force pull
-			NSUbiquitousKeyValueStore *store = [NSUbiquitousKeyValueStore defaultStore];
-			NSDictionary *dict = [store dictionaryRepresentation];
-			
-			NSMutableSet *syncedKeys = [NSMutableSet setWithArray: [dict allKeys]];
-			if ([[self whitelistedKeys] count] > 0) {
-				[syncedKeys intersectSet: [self whitelistedKeys]];
-			}
-			[syncedKeys minusSet: [self ignoredKeys]];
-			
-			NSUserDefaults *userDefaults = [NSUserDefaults standardUserDefaults];
-			for (id key in syncedKeys) {
-				id obj = [store objectForKey: key];
-				[userDefaults setObject: obj forKey:key];
-			}
-			[userDefaults synchronize];
-			
-			// Force push
-			[MKiCloudSync pushToICloud];
-			
-			// Post notification
-			NSNotificationCenter *dnc = [NSNotificationCenter defaultCenter];
-			[dnc postNotificationName: MKiCloudSyncDidUpdateNotification object: self];
-			
-			// Add self as observer
-			[dnc addObserver: self selector: @selector(pullFromICloud:) name: NSUbiquitousKeyValueStoreDidChangeExternallyNotification object: store];
-			[dnc addObserver: self selector: @selector(pushToICloud) name: NSUserDefaultsDidChangeNotification object: nil];
-			
-#if MKiCloudSyncDebug
-			NSLog(@"MKiCloudSync: Did start sync");
-			NSLog(@"MKiCloudSync: Updating from iCloud");
-#endif		
-			return YES;
+		// Force push
+		[MKiCloudSync pushToICloud];
+		
+		// Force pull
+		NSUbiquitousKeyValueStore *store = [NSUbiquitousKeyValueStore defaultStore];
+		NSDictionary *dict = [store dictionaryRepresentation];
+		
+		NSMutableSet *syncedKeys = [NSMutableSet setWithArray: [dict allKeys]];
+		if ([[self whitelistedKeys] count] > 0) {
+			[syncedKeys intersectSet: [self whitelistedKeys]];
 		}
+		[syncedKeys minusSet: [self ignoredKeys]];
+		
+		NSUserDefaults *userDefaults = [NSUserDefaults standardUserDefaults];
+		for (id key in syncedKeys) {
+			id obj = [store objectForKey: key];
+			[userDefaults setObject: obj forKey:key];
+		}
+		[userDefaults synchronize];
+		
+		// Post notification
+		NSNotificationCenter *dnc = [NSNotificationCenter defaultCenter];
+		[dnc postNotificationName: MKiCloudSyncDidUpdateNotification object: self];
+		
+		// Add self as observer
+		[dnc addObserver: self selector: @selector(pullFromICloud:) name: NSUbiquitousKeyValueStoreDidChangeExternallyNotification object: store];
+		[dnc addObserver: self selector: @selector(pushToICloud) name: NSUserDefaultsDidChangeNotification object: nil];
+		
+#if MKiCloudSyncDebug
+		NSLog(@"MKiCloudSync: Did start sync");
+#endif
+		return YES;
 	}
 	
 	return NO;
 }
 
++ (BOOL) tryToStartSync
+{
+	__block BOOL didSucceed = NO;
+	
+	dispatch_sync(_queue, ^{
+		if (!_isSyncing)
+		{
+			_isSyncing = YES;
+			didSucceed = YES;
+		}
+	});
+	
+	return didSucceed;
+}
+
 + (NSMutableSet *) ignoredKeys
 {
 	static NSMutableSet *ignoredKeys = nil;
-	static dispatch_once_t once;
-	dispatch_once(&once, ^{
+	static dispatch_once_t token;
+	dispatch_once(&token, ^{
 		ignoredKeys = [NSMutableSet new];
 	});
 	
@@ -160,8 +153,17 @@ static BOOL _isSyncing;
 	[store synchronize];
 	
 #if MKiCloudSyncDebug
-		NSLog(@"MKiCloudSync: Cleaned ubiquitous store");
+	NSLog(@"MKiCloudSync: Cleaned ubiquitous store");
 #endif
+}
+
++ (void) initialize
+{
+	if (self == [MKiCloudSync class])
+	{
+		_isSyncing = NO;
+		_queue = dispatch_queue_create("com.mugunthkumar.MKiCloudSync", DISPATCH_QUEUE_SERIAL);
+	}
 }
 
 + (void) pullFromICloud: (NSNotification *) note
@@ -171,9 +173,9 @@ static BOOL _isSyncing;
 	
 	NSUbiquitousKeyValueStore *store = note.object;
 	NSMutableSet *changedKeys = [NSMutableSet setWithArray:[note.userInfo objectForKey: NSUbiquitousKeyValueStoreChangedKeysKey]];
-
+	
 #if MKiCloudSyncDebug
-		NSLog(@"MKiCloudSync: Pulled from iCloud");
+	NSLog(@"MKiCloudSync: Pulled from iCloud");
 #endif
 	
 	if ([[self whitelistedKeys] count] > 0) {
@@ -218,12 +220,13 @@ static BOOL _isSyncing;
 
 + (void) stop
 {
-#if MKiCloudSyncDebug
-	NSLog(@"MKiCloudSync: Stop syncining with iCloud");
-#endif
 	dispatch_sync(_queue, ^{
 		_isSyncing = NO;
 		[[NSNotificationCenter defaultCenter] removeObserver: self];
+		
+#if MKiCloudSyncDebug
+		NSLog(@"MKiCloudSync: Stopped syncing with iCloud");
+#endif
 	});
 }
 
